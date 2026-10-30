@@ -1,0 +1,206 @@
+# category_dependencies.yaml
+#
+# Defines the dependency DAG between decision categories. Used by the
+# orchestrator for two things:
+#
+# 1. INTERVIEW ORDER: process categories in an order where every
+#    category's dependencies have already been decided (a valid
+#    topological sort of this graph -- see `recommended_order` below).
+#
+# 2. REVISION PROPAGATION: when a decision in category X is changed,
+#    walk this graph forward (X -> everything that depends on X,
+#    transitively) and mark the *current active decisions* in those
+#    categories as `status: stale`. Then re-validate each stale
+#    decision in topological order using a lightweight prompt (not a
+#    full re-interview):
+#
+#      "{category} changed from {old} to {new} in {upstream_category}.
+#       Current {stale_category} decision was {decision}, reasoning:
+#       {rationale}. Does this still hold, or does it need to change?"
+#
+#    If the LLM confirms, the decision's status flips back to `active`
+#    with no version bump. If it proposes a change, that decision goes
+#    through the same versioning/staleness-propagation process in turn
+#    (its own dependents get marked stale next).
+#
+# `scope` indicates whether a category is normally decided once for the
+# whole system, or separately per component:
+#   - system:               one decision for the whole project
+#   - per_component:        a separate decision is made for each component
+#   - system_and_per_component: a system-wide default with optional
+#                                per-component overrides
+
+categories:
+  deployment_style:
+    knowledge_file: deployment_style.md
+    scope: system
+    description: >
+      How the system is decomposed into deployable units and how those
+      units are distributed/deployed (monolith, microservices,
+      event-driven, serverless, etc.).
+
+  structure_pattern:
+    knowledge_file: structure_pattern.md
+    scope: per_component
+    description: >
+      How code is organized within a given deployable unit (layered,
+      hexagonal, microkernel, event sourcing + CQRS, or no special
+      pattern).
+
+  interfaces:
+    knowledge_file: interfaces.md
+    scope: per_component
+    description: >
+      Which end-user interface type a component exposes, if any (web,
+      mobile, desktop, CLI, voice, or headless) and its frontend stack.
+
+  database:
+    knowledge_file: database.md
+    scope: per_component
+    description: >
+      Data model category and specific engine used to persist a
+      component's data, if any.
+
+  apis:
+    knowledge_file: apis.md
+    scope: per_component
+    description: >
+      API architecture style (REST, GraphQL, gRPC, SOAP, WebSocket,
+      async messaging) and backend language/framework used to
+      implement a component's communication surface.
+
+  hardware:
+    knowledge_file: hardware.md
+    scope: system
+    description: >
+      Hosting model, cloud provider, and compute platform (VMs,
+      containers, PaaS, serverless, bare-metal) for the system as a
+      whole. Compute sizing/capacity planning is intentionally out of
+      scope for this knowledge base.
+
+# Recommended processing order: a valid topological sort of the
+# dependency graph below. The orchestrator should follow this order
+# during the initial interview; it is recomputed (for the affected
+# subgraph only) during revision propagation.
+recommended_order:
+  - deployment_style
+  - hardware
+  - structure_pattern
+  - interfaces
+  - database
+  - apis
+
+dependencies:
+
+  deployment_style:
+    depends_on: []
+    # Root of the graph -- always decided first, nothing informs it
+    # from within this knowledge base.
+
+  structure_pattern:
+    depends_on:
+      - deployment_style
+    reasons:
+      deployment_style: >
+        The deployable unit a component's internal structure lives in
+        (a monolith module vs an independent microservice) affects
+        which internal patterns make sense. E.g. a component that
+        becomes an independent microservice is a stronger candidate
+        for Hexagonal/Clean than the same component as one module in
+        a monolith.
+
+  interfaces:
+    depends_on:
+      - deployment_style
+    reasons:
+      deployment_style: >
+        Deployment style shapes what interface options are natural to
+        pair with a component. E.g. Microservices/Serverless pair
+        naturally with an SPA or mobile client talking to a clean API
+        boundary; a traditional Monolith pairs naturally with a
+        server-rendered MPA if there's no strong reason otherwise.
+
+  database:
+    depends_on:
+      - deployment_style
+      - structure_pattern
+    reasons:
+      deployment_style: >
+        Microservices favor polyglot persistence (separate databases
+        per service); a Monolith more often uses a single shared
+        database. This affects whether the database decision is made
+        once or meaningfully varies per component.
+      structure_pattern: >
+        Event Sourcing + CQRS (a structure_pattern option) has direct
+        implications for database choice on the write side (favors an
+        append-friendly store or dedicated event store) and often a
+        different, denormalized store on the read side.
+
+  apis:
+    depends_on:
+      - deployment_style
+      - structure_pattern
+      - interfaces
+    reasons:
+      deployment_style: >
+        If deployment_style is Event-Driven Architecture, the Async
+        Messaging API category is very likely correct for
+        inter-component communication -- this is close to a direct
+        implication, not just a hint.
+      structure_pattern: >
+        A component using Event Sourcing + CQRS naturally splits its
+        API surface into a command side and a query side, which
+        shapes API design regardless of which style (REST/GraphQL/
+        gRPC) is chosen.
+      interfaces: >
+        The consuming client type (browser SPA, mobile app, CLI,
+        headless) constrains which API styles are practical -- e.g.
+        gRPC needs gRPC-Web tooling to be consumed directly by
+        browsers, which matters if interfaces chose a web SPA.
+
+  hardware:
+    depends_on:
+      - deployment_style
+    reasons:
+      deployment_style: >
+        Deployment style strongly determines the compute platform:
+        Microservices pairs naturally with Containers + Orchestration,
+        Serverless deployment style implies Serverless compute
+        infrastructure almost directly, and a simple Monolith often
+        fits VMs or PaaS without needing orchestration complexity.
+      # Note: hardware previously also depended on `database`, but
+      # that edge was justified almost entirely by compute sizing
+      # (e.g. cluster sizing for Cassandra vs a single Postgres
+      # instance), which has been removed from this knowledge base.
+      # The remaining hardware categories (hosting model, provider,
+      # compute platform) don't meaningfully depend on database
+      # choice, so the edge was dropped -- see soft_cross_references
+      # below for the residual, non-blocking relationship.
+
+# Cross-references noted but NOT modeled as hard dependencies above,
+# because they inform judgment without determining the decision. The
+# orchestrator can surface these as context during interviews without
+# triggering staleness propagation on change.
+soft_cross_references:
+  - from: structure_pattern
+    to: apis
+    note: >
+      Event Sourcing + CQRS suggests a command/query API split, but
+      doesn't force a specific API style -- kept soft rather than a
+      hard dependency edge since apis already depends on
+      structure_pattern directly above.
+  - from: interfaces
+    to: hardware
+    note: >
+      A mobile or desktop interface may imply CDN/app-distribution
+      needs, but this rarely changes the core hosting/compute
+      decision, so it's not modeled as a hard dependency.
+  - from: database
+    to: hardware
+    note: >
+      A database that expects a multi-node cluster (e.g. Cassandra,
+      Kafka-backed event stores) has some bearing on the compute
+      platform decision, but with compute sizing removed from scope,
+      this rarely changes the hosting-model/provider/platform choice
+      itself -- kept as a soft reference rather than a hard
+      dependency.

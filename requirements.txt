@@ -1,0 +1,14 @@
+# Requires Python 3.10+ (pydantic v2 resolves `X | None` union syntax at
+# runtime; this needs native support from PEP 604, not just the `from
+# __future__ import annotations` used throughout this codebase).
+#
+# Versions below are minimums, pinned to what this project was actually
+# built and tested against -- not guessed. Verified via `pip show` in
+# the environment these modules were developed and tested in.
+
+pydantic>=2.13.5
+PyYAML>=6.0.3
+ollama>=0.6.2
+langgraph>=1.2.11
+langgraph-checkpoint-sqlite>=3.1.1
+streamlit>=1.64.0

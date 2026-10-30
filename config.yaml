@@ -1,0 +1,12 @@
+# Configuration for the architecture-decision assistant.
+# Edit these values to match your local Ollama setup.
+
+ollama:
+  model: "llama3.2"                # the Ollama model used for all agent calls
+  host: "http://localhost:11434"   # Ollama server address
+  temperature: 0.1                 # low temperature for more reliable structured output
+  max_retries: 3                   # retries for malformed/invalid structured output, per call
+
+session:
+  sessions_dir: "./sessions"       # base directory under which each named project gets its
+                                    # own subfolder (checkpoint.db + rendered output files)
